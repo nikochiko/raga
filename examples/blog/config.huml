@@ -1,0 +1,37 @@
+title: "My Awesome Blog"
+base_url: "https://raga.kaustubh.page"
+templates_dir: "templates"
+partials_dir: "templates/partials"
+
+pages::
+  # rules for pages
+  home::
+    dst: "index.html"
+    tmpl: "home.hbs"
+  about::
+    src: "about.md"
+    dst: "about.html"
+    tmpl: "about.hbs"
+  rss::
+    dst: "rss.xml"
+    tmpl: "rss.hbs"
+  posts::
+    src::
+      glob: "**/*.md"
+    excl::
+      frontmatter:: draft: true
+      glob: "**/_list.md"
+    dst: "{{ replace '.md' '.html' src_path }}"
+    tmpl: "post.hbs"
+  lists::
+    src::
+      glob: "**/_list.md"
+    excl::
+      frontmatter::
+        draft: true
+    dst: "{{ replace '_list.md' 'index.html' src_path }}"
+    tmpl: "list.hbs"
+
+params::
+  # arbitrary parameters
+  version: "0.1.0-alpha"

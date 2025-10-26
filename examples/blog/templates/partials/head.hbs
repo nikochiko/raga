@@ -1,0 +1,16 @@
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>{{ (or metadata.title site.title) }}</title>
+
+  {{#with metadata.description }}
+  <meta name="description" content="{{ . }}">
+  {{else}}
+  {{#if site.params.version }}
+  <meta name="description" content="Version {{ site.params.version }}">
+  {{/if}}
+  {{/with}}
+
+  {{{head_extra}}}
+</head>

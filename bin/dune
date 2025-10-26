@@ -1,0 +1,11 @@
+(executable
+ (public_name raga)
+ (name main)
+ (libraries raga)
+ (modules main version))
+
+(rule
+ (target version.ml)
+ (action
+  (with-stdout-to %{target}
+   (echo "let version = \"%{version:raga}\""))))

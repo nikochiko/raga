@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>{{site.title}}</title>
+    {{#if site.base_url}}
+    <link>{{site.base_url}}</link>
+    {{/if}}
+    <description>{{site.title}} - Latest Posts</description>
+
+    {{#each get_all_pages}}
+    {{#if (eq (dirname src_path) "posts")}}
+    <item>
+      <title>{{title}}</title>
+      {{#if @root.site.base_url}}
+      <link>{{@root.site.base_url}}{{url}}</link>
+      <guid>{{@root.site.base_url}}{{url}}</guid>
+      {{/if}}
+      <description>{{title}}</description>
+    </item>
+    {{/if}}
+    {{/each}}
+  </channel>
+</rss>
