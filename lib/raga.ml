@@ -657,9 +657,12 @@ module Generator = struct
         compiled_dst
       in
       let url =
-        match Filename.chop_suffix_opt ~suffix:"/index.html" dst_path with
-        | Some s -> s ^ "/"
-        | None -> dst_path
+        let rel_url =
+          match Filename.chop_suffix_opt ~suffix:"/index.html" dst_path with
+          | Some s -> s ^ "/"
+          | None -> dst_path
+        in
+        "/" // rel_url
       in
       { Page.content; frontmatter; src_path; dst_path; url; title }
     in
