@@ -16,20 +16,18 @@ pages::
     dst: "rss.xml"
     tmpl: "rss.hbs"
   posts::
-    src::
-      glob: "**/*.md"
+    src: "**/*.md"
     excl::
       frontmatter:: draft: true
       glob: "**/_list.md"
-    dst: "{{ replace '.md' '.html' src_path }}"
+    dst: "{{ concat_path (chop_suffix src_path '.md') '.html' }}"
     tmpl: "post.hbs"
   lists::
-    src::
-      glob: "**/_list.md"
+    src: "**/_list.md"
     excl::
       frontmatter::
         draft: true
-    dst: "{{ replace '_list.md' 'index.html' src_path }}"
+    dst: "{{ concat_path (chop_suffix src_path '_list.md') 'index.html' }}"
     tmpl: "list.hbs"
 
 params::

@@ -20,9 +20,6 @@ end
 
 (** Page rule configuration *)
 module PageRule : sig
-  (** Source specification *)
-  type src = SrcPath of string | SrcGlob of string
-
   (** Exclusion rules *)
   type excl =
     | Frontmatter of (string * Huml.t) list
@@ -31,7 +28,7 @@ module PageRule : sig
 
   type t = {
     name : string;
-    src : src list;
+    src : string option;
     dst : string;
     tmpl : string;
     excl : excl list;

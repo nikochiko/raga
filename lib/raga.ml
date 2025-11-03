@@ -1,4 +1,5 @@
 let ( // ) = Filename.concat
+let compose = fun f g x -> f (g x)
 
 let rec hb_literal_of_huml = function
   | `String s -> `String s
@@ -53,8 +54,6 @@ module Page = struct
 end
 
 module PageRule = struct
-  type src = SrcPath of string | SrcGlob of string
-
   type excl =
     | Frontmatter of (string * Huml.t) list
     | ExclGlob of string
@@ -62,7 +61,7 @@ module PageRule = struct
 
   type t = {
     name : string;
-    src : src list;
+    src : string option;
     dst : string;
     tmpl : string;
     excl : excl list;
@@ -71,15 +70,8 @@ module PageRule = struct
   let of_assoc ~name assoc =
     let src =
       match List.assoc_opt "src" assoc with
-      | None -> []
-      | Some (`String s) -> [ SrcPath s ]
-      | Some (`Assoc lst) ->
-          lst
-          |> List.map (fun (k, v) ->
-                 match (k, v) with
-                 | "path", `String s -> SrcPath s
-                 | "glob", `String s -> SrcGlob s
-                 | _ -> failwith ("Invalid src entry in page " ^ name))
+      | None -> None
+      | Some (`String s) -> Some s
       | Some _ -> failwith ("Invalid src format in page " ^ name)
     in
     let dst =
@@ -544,18 +536,6 @@ end
 module Generator = struct
   let process_page_rule (site : Site.t) (rule : PageRule.t) base_dir =
     let content_dir = base_dir // site.content_dir in
-    let find_source_files = function
-      | PageRule.SrcPath path -> [ Some (content_dir // path) ]
-      | PageRule.SrcGlob pattern ->
-          FileUtils.find_files_glob pattern content_dir
-          |> List.map (fun p -> Some p)
-    in
-
-    let all_source_files =
-      if rule.src = [] then [ None ]
-      else
-        List.fold_left (fun acc src -> find_source_files src @ acc) [] rule.src
-    in
 
     (* Apply exclusion filters *)
     let should_exclude file_path =
@@ -600,11 +580,15 @@ module Generator = struct
         rule.excl
     in
 
-    let filtered_source_files =
-      all_source_files
-      |> List.filter (function
-           | Some file -> not (should_exclude file)
-           | None -> true)
+    let source_files =
+      match rule.src with
+      | None -> None
+      | Some pattern ->
+          let file_paths =
+            FileUtils.find_files_glob pattern content_dir
+            |> List.filter (compose not should_exclude)
+          in
+          Some file_paths
     in
 
     let process_markdown_metadata file_path content =
@@ -700,7 +684,9 @@ module Generator = struct
       { Page.content; frontmatter; src_path; dst_path; url; title }
     in
 
-    List.map process_file filtered_source_files
+    match source_files with
+    | Some files -> List.map (fun fp -> process_file (Some fp)) files
+    | None -> [ process_file None ]
 
   let generate site base_dir output_dir =
     (* Process all page rules to get pages *)
