@@ -11,6 +11,20 @@ let rec hb_literal_of_huml = function
   | `Assoc pairs ->
       `Assoc (List.map (fun (k, v) -> (k, hb_literal_of_huml v)) pairs)
 
+let url_of_path path =
+  let open Filename in
+  let rec aux acc p =
+    match (dirname p, basename p) with
+    | dir, base when base = current_dir_name ->
+        assert (dir = current_dir_name);
+        let acc = "/" :: acc in
+        String.concat "" acc
+    | dir, base -> aux ((base ^ "/") :: acc) dir
+  in
+  match (dirname path, basename path) with
+  | dir, "index.html" -> aux [] dir
+  | dir, base -> aux [ base ] dir
+
 (* Page type for content and frontmatter *)
 module Page = struct
   type t = {
@@ -646,7 +660,22 @@ module Generator = struct
               ~get_helper:(Template.get_helper dummy_env)
               rule.dst hb_dst_context
           with
-          | Ok result -> result
+          | Ok path ->
+              let rec validate acc p =
+                let open Filename in
+                match (dirname p, basename p) with
+                | _, base when base = parent_dir_name || base = current_dir_name
+                  ->
+                    failwith
+                      (Printf.sprintf
+                         "Destination path %S must be a relative implicit path \
+                          (no .. or absolute paths allowed)"
+                         p)
+                | dir, base when dir = current_dir_name ->
+                    List.fold_left (fun acc' s -> acc' // s) base acc
+                | dir, base -> validate (base :: acc) dir
+              in
+              validate [] path
           | Error err ->
               let msg =
                 Printf.sprintf "Error compiling dst template %S: %s" rule.dst
@@ -656,14 +685,7 @@ module Generator = struct
         in
         compiled_dst
       in
-      let url =
-        let rel_url =
-          match Filename.chop_suffix_opt ~suffix:"/index.html" dst_path with
-          | Some s -> s ^ "/"
-          | None -> dst_path
-        in
-        "/" // rel_url
-      in
+      let url = url_of_path dst_path in
       { Page.content; frontmatter; src_path; dst_path; url; title }
     in
 
