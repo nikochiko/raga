@@ -361,6 +361,16 @@ module Template = struct
       | _ -> None
     in
 
+    let concat_path args =
+      let rec aux = function
+        | [] -> failwith "concat_path requires at least one argument"
+        | `String last :: [] -> last
+        | `String base :: rest -> base // aux rest
+        | _ -> failwith "concat_path only accepts string arguments"
+      in
+      Some (`String (aux args))
+    in
+
     match name with
     | "md2html" -> Some md2html
     | "replace" -> Some replace
@@ -374,6 +384,7 @@ module Template = struct
     | "parse_date" -> Some parse_date
     | "endswith" -> Some endswith
     | "startswith" -> Some startswith
+    | "concat_path" -> Some concat_path
     | _ -> Handlebars_ml.default_get_helper name
 
   let get_partial env partial_name =
