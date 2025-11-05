@@ -64,6 +64,7 @@ module PageRule = struct
     dst : string;
     tmpl : string;
     excl : excl list;
+    enable_frontmatter : bool;
   }
 
   let of_assoc ~name assoc =
@@ -112,7 +113,15 @@ module PageRule = struct
                       ^ ". Supported types: frontmatter, glob, path"))
       | Some _ -> failwith ("Invalid excl format in page " ^ name)
     in
-    { name; src; dst; tmpl; excl }
+    let enable_frontmatter =
+      match List.assoc_opt "enable_frontmatter" assoc with
+      | Some (`Bool b) -> b
+      | Some _ ->
+          failwith
+            ("enable_frontmatter must be a boolean in page " ^ name)
+      | None -> true
+    in
+    { name; src; dst; tmpl; excl; enable_frontmatter }
 end
 
 module Page = struct
@@ -588,8 +597,8 @@ module Generator = struct
           Some file_paths
     in
 
-    let process_markdown_metadata file_path content =
-      let frontmatter, markdown_content =
+    let extract_frontmatter file_path content =
+      let frontmatter, other_content =
         FileUtils.extract_frontmatter content
       in
       let frontmatter_data =
@@ -601,7 +610,7 @@ module Generator = struct
                  (Printexc.to_string exn))
         else []
       in
-      (frontmatter_data, markdown_content)
+      (frontmatter_data, other_content)
     in
 
     let process_file file_path_opt =
@@ -609,10 +618,9 @@ module Generator = struct
         match file_path_opt with
         | Some file_path -> (
             let raw_content = FileUtils.read_file file_path in
-            match Filename.extension file_path with
-            | ".md" | ".markdown" ->
-                process_markdown_metadata file_path raw_content
-            | _ -> ([], raw_content))
+            if rule.enable_frontmatter then
+              extract_frontmatter file_path raw_content
+            else ([], raw_content))
         | None -> ([], "")
       in
       let title =

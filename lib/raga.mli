@@ -19,6 +19,7 @@ module PageRule : sig
     dst : string;
     tmpl : string;
     excl : excl list;
+    enable_frontmatter: bool;
   }
   (** Page rule definition *)
 
