@@ -1,5 +1,7 @@
 (** Static site generator library for Raga *)
 
+open Handlebars_ml
+
 val hb_literal_of_huml : Huml.t -> Huml.t
 (** Convert HUML values to handlebars-compatible literals *)
 
@@ -70,7 +72,7 @@ module Template : sig
     content : string;
     context : Huml.t;
     partials : (string * string) list;
-    helpers : (string * Handlebars_ml.Compiler.custom_helper) list;
+    helpers : (string * Handlebars.custom_helper) list;
   }
 
   val render : t -> string

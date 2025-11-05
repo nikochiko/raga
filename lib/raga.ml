@@ -1,3 +1,5 @@
+open Handlebars_ml
+
 let ( // ) = Filename.concat
 let compose = fun f g x -> f (g x)
 
@@ -377,7 +379,7 @@ module Template = struct
     content : string;
     context : Huml.t;
     partials : (string * string) list;
-    helpers : (string * Handlebars_ml.Compiler.custom_helper) list;
+    helpers : (string * Handlebars.custom_helper) list;
   }
 
   let hb_is_truthy = function
@@ -506,21 +508,21 @@ module Template = struct
         | "endswith" -> Some endswith
         | "startswith" -> Some startswith
         | "concat_path" -> Some concat_path
-        | _ -> Handlebars_ml.default_get_helper name)
+        | _ -> Handlebars.default_get_helper name)
 
   let render template =
     let hb_context = hb_literal_of_huml template.context in
     let get_partial name = List.assoc_opt name template.partials in
 
     match
-      Handlebars_ml.compile ~get_helper:(get_helper template) ~get_partial
+      Handlebars.compile ~get_helper:(get_helper template) ~get_partial
         template.content hb_context
     with
     | Ok result -> result
     | Error err ->
         let msg =
           Printf.sprintf "Render error in template %S: %s" template.name
-            (Handlebars_ml.Compiler.show_hb_error err)
+            (Handlebars.show_hb_error err)
         in
         failwith msg
 

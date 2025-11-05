@@ -23,7 +23,7 @@
  (description "Simple static site generator with Handlebars templating")
  (depends
    ocaml
-   (handlebars-ml (>= 0.2.1))
+   (handlebars-ml (>= 0.3.0))
    (huml (>= 0.1.1))
    (re (>= 1.10.3))
    (omd (>= 2.0.0~alpha1))
