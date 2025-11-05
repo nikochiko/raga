@@ -40,6 +40,24 @@ let spec_list =
     ("-help", Arg.Unit (fun () -> show_help ()), "");
   ]
 
+let mk_temp_dir prefix =
+  let temp_dir = Filename.get_temp_dir_name () in
+  let mk_random n =
+    let chars =
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    in
+    String.init n (fun _ -> String.get chars (Random.int (String.length chars)))
+  in
+  let rec find_unique_dir () =
+    let dir_name = Printf.sprintf "%s%s%s" prefix "_" (mk_random 16) in
+    let full_path = Filename.concat temp_dir dir_name in
+    if Sys.file_exists full_path then find_unique_dir ()
+    else full_path
+  in
+  let unique_dir = find_unique_dir () in
+  Sys.mkdir unique_dir 0o700;
+  unique_dir
+
 let () =
   Arg.parse spec_list set_source_dir usage_msg;
 
@@ -78,7 +96,7 @@ let () =
   Printf.eprintf "raga %s\n" Version.version;
   Printf.eprintf "Generating site...\n\n";
 
-  let tmp_output_dir = Filename.temp_dir "raga_output_" "" in
+  let tmp_output_dir = mk_temp_dir "raga_output_" in
   Raga.Generator.generate site !source_dir tmp_output_dir;
   Raga.FileUtils.mv_r tmp_output_dir final_output_dir;
 

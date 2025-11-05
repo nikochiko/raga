@@ -19,14 +19,14 @@
 
 (package
  (name raga)
- (synopsis "simple static site generator")
+ (synopsis "Simple static site generator")
  (description "Simple static site generator with Handlebars templating")
  (depends
    ocaml
-   (handlebars-ml (>= 0.2.0))
-   (huml-ml (>= v0.1.1))
-   re
-   (omd (>= 2.0.0))
+   (handlebars-ml (>= 0.2.1))
+   (huml (>= 0.1.1))
+   (re (>= 1.10.3))
+   (omd (>= 2.0.0~alpha1))
    uri
    ptime)
  (tags
