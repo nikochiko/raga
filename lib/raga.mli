@@ -3,21 +3,6 @@
 val hb_literal_of_huml : Huml.t -> Huml.t
 (** Convert HUML values to handlebars-compatible literals *)
 
-(** Page representation *)
-module Page : sig
-  type t = {
-    content : string;  (** Page content without frontmatter *)
-    frontmatter : (string * Huml.t) list;  (** Parsed frontmatter as HUML *)
-    src_path : string option;  (** Source file path *)
-    dst_path : string;  (** Destination file path *)
-    url : string;  (** Generated URL *)
-    title : string;  (** Page title *)
-  }
-
-  val to_huml : t -> Huml.t
-  (** Convert page to HUML representation *)
-end
-
 (** Page rule configuration *)
 module PageRule : sig
   (** Exclusion rules *)
@@ -37,6 +22,22 @@ module PageRule : sig
 
   val of_assoc : name:string -> (string * Huml.t) list -> t
   (** Create page rule from HUML association *)
+end
+
+(** Page representation *)
+module Page : sig
+  type t = {
+    content : string;  (** Page content without frontmatter *)
+    frontmatter : (string * Huml.t) list;  (** Parsed frontmatter as HUML *)
+    src_path : string option;  (** Source file path *)
+    dst_path : string;  (** Destination file path *)
+    url : string;  (** Generated URL *)
+    title : string;  (** Page title *)
+    rule : PageRule.t;  (** Page rule applied *)
+  }
+
+  val to_huml : t -> Huml.t
+  (** Convert page to HUML representation *)
 end
 
 (** Site configuration *)
@@ -96,7 +97,7 @@ module FileUtils : sig
   val cp : string -> string -> unit
   (** Copy file *)
 
-  val cp_r : string -> string -> unit
+  val cp_r : string -> string -> int
   (** Recursively copy directory *)
 end
 

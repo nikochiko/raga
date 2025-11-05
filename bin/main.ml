@@ -59,7 +59,6 @@ let () =
     Printf.eprintf "Error: Configuration file not found: %s\n" config_path;
     exit 1);
 
-  Printf.printf "Reading configuration from %s\n" config_path;
   let config_content = Raga.FileUtils.read_file config_path in
   let lexbuf = Lexing.from_string config_content in
   let config_huml =
@@ -75,12 +74,13 @@ let () =
     else { site with base_url = Some !base_url_override }
   in
 
-  Printf.printf "Generating site from %s to %s\n" !source_dir final_output_dir;
-  Printf.printf "Site title: %s\n" site.title;
-  Printf.printf "Template directory: %s\n" site.templates_dir;
-  Printf.printf "Number of page rules: %d\n" (List.length site.rules);
+  let init_time = Sys.time () in
+  Printf.eprintf "raga %s\n" Version.version;
+  Printf.eprintf "Generating site...\n\n";
 
   let tmp_output_dir = Filename.temp_dir "raga_output_" "" in
   Raga.Generator.generate site !source_dir tmp_output_dir;
   Raga.FileUtils.mv_r tmp_output_dir final_output_dir;
-  Printf.printf "Site generation completed\n"
+
+  let end_time = Sys.time () in
+  Printf.eprintf "\nGenerated in %.1f seconds\n" (end_time -. init_time)

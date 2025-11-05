@@ -31,32 +31,24 @@ let unwind ~protect f x =
   let _ = protect x in
   match res with Either.Left v -> v | Either.Right exn -> raise exn
 
-(* Page type for content and frontmatter *)
-module Page = struct
-  type t = {
-    content : string;
-    frontmatter : (string * Huml.t) list;
-    src_path : string option;
-    dst_path : string;
-    url : string;
-    title : string;
-  }
-
-  let to_huml page =
-    let frontmatter_handlebars =
-      List.map (fun (k, v) -> (k, hb_literal_of_huml v)) page.frontmatter
-    in
-    `Assoc
-      [
-        ("content", `String page.content);
-        ( "src_path",
-          match page.src_path with Some s -> `String s | None -> `Null );
-        ("dst_path", `String page.dst_path);
-        ("url", `String page.url);
-        ("title", `String page.title);
-        ("frontmatter", `Assoc frontmatter_handlebars);
-      ]
-end
+let print_ascii_table lst =
+  let max_fst_len =
+    List.fold_left (fun acc (k, _) -> max acc (String.length k)) 0 lst
+  in
+  let max_snd_len =
+    List.fold_left (fun acc (_, v) -> max acc (String.length v)) 5 lst
+  in
+  let print_sep () =
+    Printf.eprintf "--%s--+--%s--\n"
+      (String.make max_fst_len '-')
+      (String.make max_snd_len '-')
+  in
+  let print_row (fst, snd) =
+    Printf.eprintf "  %-*s  |  %-*s  \n" max_fst_len fst max_snd_len snd
+  in
+  print_row ("", "Count");
+  print_sep ();
+  List.iter print_row lst
 
 module PageRule = struct
   type excl =
@@ -119,6 +111,33 @@ module PageRule = struct
       | Some _ -> failwith ("Invalid excl format in page " ^ name)
     in
     { name; src; dst; tmpl; excl }
+end
+
+module Page = struct
+  type t = {
+    content : string;
+    frontmatter : (string * Huml.t) list;
+    src_path : string option;
+    dst_path : string;
+    url : string;
+    title : string;
+    rule : PageRule.t;
+  }
+
+  let to_huml page =
+    let frontmatter_handlebars =
+      List.map (fun (k, v) -> (k, hb_literal_of_huml v)) page.frontmatter
+    in
+    `Assoc
+      [
+        ("content", `String page.content);
+        ( "src_path",
+          match page.src_path with Some s -> `String s | None -> `Null );
+        ("dst_path", `String page.dst_path);
+        ("url", `String page.url);
+        ("title", `String page.title);
+        ("frontmatter", `Assoc frontmatter_handlebars);
+      ]
 end
 
 module Site = struct
@@ -282,12 +301,6 @@ module FileUtils = struct
     in
     collect_files base_dir []
 
-  let collect_partials base_dir =
-    find_files_glob "*.hbs" base_dir
-    |> List.map @@ fun path ->
-       let partial_name = Filename.basename path |> Filename.remove_extension in
-       (partial_name, read_file path)
-
   let title_of_filename filename =
     (* convert a filename like "my-first-post.md" to "My First Post" *)
     let base = Filename.remove_extension filename in
@@ -298,6 +311,11 @@ module FileUtils = struct
          if String.length word > 0 then String.capitalize_ascii word else word
     in
     String.concat " " capitalized_words
+
+  let rec mkdir_p path =
+    if not (Sys.file_exists path) then (
+      mkdir_p (Filename.dirname path);
+      Sys.mkdir path 0o755)
 
   let rec rm_r dir =
     (Sys.readdir dir
@@ -332,16 +350,25 @@ module FileUtils = struct
     close_in ic;
     close_out oc
 
-  let rec cp_r src dst =
-    if Sys.is_directory src then (
-      if not (Sys.file_exists dst) then Sys.mkdir dst 0o755;
-      Sys.readdir src
-      |> Array.iter @@ fun entry ->
-         let src_path = src // entry in
-         let dst_path = dst // entry in
-         if Sys.is_directory src_path then cp_r src_path dst_path
-         else cp src_path dst_path)
-    else cp src dst
+  let cp_r src dst =
+    let count = ref 0 in
+    let cp' p1 p2 =
+      incr count;
+      cp p1 p2
+    in
+    let rec aux src dst =
+      if Sys.is_directory src then (
+        if not (Sys.file_exists dst) then Sys.mkdir dst 0o755;
+        Sys.readdir src
+        |> Array.iter @@ fun entry ->
+           let src_path = src // entry in
+           let dst_path = dst // entry in
+           if Sys.is_directory src_path then aux src_path dst_path
+           else cp' src_path dst_path)
+      else cp' src dst
+    in
+    aux src dst;
+    !count
 end
 
 module Template = struct
@@ -635,108 +662,124 @@ module Generator = struct
         validate [] path
       in
       let url = url_of_path dst_path in
-      { Page.content; frontmatter; src_path; dst_path; url; title }
+      { Page.content; frontmatter; src_path; dst_path; url; title; rule }
     in
 
     match source_files with
     | Some files -> List.map (fun fp -> process_file (Some fp)) files
     | None -> [ process_file None ]
 
-  let generate site base_dir output_dir =
-    (* Process all page rules to get pages *)
+  let collect_partials base_dir =
+    FileUtils.find_files_glob "*.hbs" base_dir
+    |> List.map @@ fun path ->
+       let partial_name = Filename.basename path |> Filename.remove_extension in
+       (partial_name, FileUtils.read_file path)
+
+  let get_all_pages_helper all_pages = function
+    | [ `String sort_by; `String order ] ->
+        if order <> "asc" && order <> "desc" then
+          failwith "order must be 'asc' or 'desc'"
+        else
+          let pages_hb =
+            all_pages
+            |> List.sort (fun p1 p2 ->
+                   let v1 = List.assoc_opt sort_by p1.Page.frontmatter in
+                   let v2 = List.assoc_opt sort_by p2.Page.frontmatter in
+                   match (v1, v2) with
+                   | Some (`String s1), Some (`String s2) ->
+                       String.compare s1 s2
+                   | Some (`Int i1), Some (`Int i2) -> Int.compare i1 i2
+                   | Some (`Float f1), Some (`Float f2) -> Float.compare f1 f2
+                   | Some _, Some _ -> 0
+                   | Some _, None -> 1
+                   | None, Some _ -> -1
+                   | None, None -> 0)
+            |> List.map (fun page -> Page.to_huml page)
+            |> fun ls -> if order = "asc" then ls else List.rev ls
+          in
+          Some (`List pages_hb)
+    | _ -> None
+
+  let make_default_context site page =
+    let site_context = Site.to_huml site in
+    let page_context = Page.to_huml page in
+
+    `Assoc
+      [
+        ("site", site_context);
+        ("page", page_context);
+        ("content", `String page.content);
+        ("url", `String page.url);
+        ("title", `String page.title);
+        ( "frontmatter",
+          `Assoc
+            (List.map
+               (fun (k, v) -> (k, hb_literal_of_huml v))
+               page.frontmatter) );
+      ]
+
+  let generate_page ~partials ~helpers ~templates_dir ~output_dir
+      ~(site : Site.t) ~(page : Page.t) =
+    let context = make_default_context site page in
+    let tmpl =
+      let tmpl_content =
+        FileUtils.read_file (templates_dir // page.rule.tmpl)
+      in
+      Template.of_string ~name:page.rule.tmpl ~context ~partials ~helpers
+        tmpl_content
+    in
+    let rendered = Template.render tmpl in
+    let output_path = output_dir // page.dst_path in
+    let () = FileUtils.mkdir_p (Filename.dirname output_path) in
+    open_out output_path
+    |> unwind ~protect:close_out @@ fun oc -> output_string oc rendered
+
+  let generate (site : Site.t) base_dir output_dir =
+    let count_by_rule = Hashtbl.create (List.length site.rules) in
     let all_pages =
-      List.fold_left
-        (fun acc rule ->
-          let pages = process_page_rule site rule base_dir in
-          pages @ acc)
-        [] site.rules
+      site.rules
+      |> List.concat_map @@ fun rule ->
+         let pages = process_page_rule site rule base_dir in
+         let new_count =
+           match Hashtbl.find_opt count_by_rule rule.name with
+           | Some c -> c + List.length pages
+           | None -> List.length pages
+         in
+         Hashtbl.replace count_by_rule rule.name new_count;
+         pages
     in
 
-    (* Set up template environment *)
     let templates_dir = base_dir // site.templates_dir in
     let partials_dir = base_dir // site.partials_dir in
     let static_dir = base_dir // site.static_dir in
-    let get_all_pages_helper = function
-      | [ `String sort_by; `String order ] ->
-          if order <> "asc" && order <> "desc" then
-            failwith "order must be 'asc' or 'desc'"
-          else
-            let pages_hb =
-              all_pages
-              |> List.sort (fun p1 p2 ->
-                     let v1 = List.assoc_opt sort_by p1.Page.frontmatter in
-                     let v2 = List.assoc_opt sort_by p2.Page.frontmatter in
-                     match (v1, v2) with
-                     | Some (`String s1), Some (`String s2) ->
-                         String.compare s1 s2
-                     | Some (`Int i1), Some (`Int i2) -> Int.compare i1 i2
-                     | Some (`Float f1), Some (`Float f2) -> Float.compare f1 f2
-                     | Some _, Some _ -> 0
-                     | Some _, None -> 1
-                     | None, Some _ -> -1
-                     | None, None -> 0)
-              |> List.map (fun page -> Page.to_huml page)
-              |> fun ls -> if order = "asc" then ls else List.rev ls
-            in
 
-            Some (`List pages_hb)
-      | _ -> None
-    in
-    let helpers = [ ("get_all_pages", get_all_pages_helper) ] in
+    let helpers = [ ("get_all_pages", get_all_pages_helper all_pages) ] in
+    let partials = collect_partials partials_dir in
 
-    (* Generate each page *)
-    let generate_page (page : Page.t) (rule : PageRule.t) =
-      let site_context = Site.to_huml site in
-      let page_context = Page.to_huml page in
-
-      let context =
-        `Assoc
-          [
-            ("site", site_context);
-            ("page", page_context);
-            ("content", `String page.content);
-            ("url", `String page.url);
-            ("title", `String page.title);
-            ( "frontmatter",
-              `Assoc
-                (List.map
-                   (fun (k, v) -> (k, hb_literal_of_huml v))
-                   page.frontmatter) );
-          ]
-      in
-
-      let tmpl_content = FileUtils.read_file (templates_dir // rule.tmpl) in
-      let tmpl =
-        Template.of_string ~name:rule.tmpl ~context
-          ~partials:(FileUtils.collect_partials partials_dir)
-          ~helpers tmpl_content
-      in
-      let rendered = Template.render tmpl in
-
-      let output_path = output_dir // page.dst_path in
-      let output_dir_path = Filename.dirname output_path in
-
-      (* Create output directory if it doesn't exist *)
-      let rec create_dirs path =
-        if not (Sys.file_exists path) then (
-          create_dirs (Filename.dirname path);
-          Sys.mkdir path 0o755)
-      in
-      create_dirs output_dir_path;
-
-      (* Write the file *)
-      let oc = open_out output_path in
-      output_string oc rendered;
-      close_out oc
+    let static_files_copied =
+      if Sys.file_exists static_dir && Sys.is_directory static_dir then
+        FileUtils.cp_r static_dir output_dir
+      else 0
     in
 
-    if Sys.file_exists static_dir && Sys.is_directory static_dir then
-      FileUtils.cp_r static_dir output_dir;
+    let () =
+      all_pages
+      |> List.iter @@ fun page ->
+         generate_page ~helpers ~partials ~output_dir ~templates_dir ~site ~page
+    in
 
-    (* Match pages with their rules and generate *)
-    List.iter
-      (fun rule ->
-        let pages = process_page_rule site rule base_dir in
-        List.iter (fun page -> generate_page page rule) pages)
-      site.rules
+    let info_table =
+      [
+        ("-------------------", "----");
+        ("Rules", string_of_int (List.length site.rules));
+        ("Pages", string_of_int (List.length all_pages));
+        ("Static Files", string_of_int static_files_copied);
+      ]
+      |> Hashtbl.fold
+           (fun rule_name count acc ->
+             (Printf.sprintf "%s pages" rule_name, string_of_int count) :: acc)
+           count_by_rule
+      |> List.rev
+    in
+    print_ascii_table info_table
 end
