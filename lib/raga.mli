@@ -64,24 +64,16 @@ end
 
 (** Template processing *)
 module Template : sig
-  type env = {
-    templates_dir : string;
-    partials_dir : string;
-    pages : Page.t list;
+  type t = {
+    name : string; (* for error reporting *)
+    content : string;
+    context : Huml.t;
+    partials : (string * string) list;
+    helpers : (string * Handlebars_ml.Compiler.custom_helper) list;
   }
-  (** Template environment *)
 
-  val mk_env : Page.t list -> string -> string -> env
-  (** Create template environment *)
-
-  val render : env -> string -> Huml.t -> string
+  val render : t -> string
   (** Render template with context *)
-
-  val get_helper : env -> string -> (Huml.t list -> Huml.t option) option
-  (** Get handlebars helper function *)
-
-  val get_partial : env -> string -> string option
-  (** Get partial template *)
 end
 
 (** File processing utilities *)

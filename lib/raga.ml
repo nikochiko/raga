@@ -26,6 +26,11 @@ let url_of_path path =
   | dir, "index.html" -> aux [] dir
   | dir, base -> aux [ base ] dir
 
+let unwind ~protect f x =
+  let res = try Either.Left (f x) with exn -> Either.Right exn in
+  let _ = protect x in
+  match res with Either.Left v -> v | Either.Right exn -> raise exn
+
 (* Page type for content and frontmatter *)
 module Page = struct
   type t = {
@@ -216,15 +221,137 @@ module Site = struct
     `Assoc site_obj
 end
 
-module Template = struct
-  type env = {
-    templates_dir : string;
-    partials_dir : string;
-    pages : Page.t list;
-  }
+(* File processing utilities *)
+module FileUtils = struct
+  let extract_frontmatter content =
+    let lines = String.split_on_char '\n' content in
+    let rec extract_frontmatter acc in_frontmatter = function
+      | [] -> (List.rev acc, [])
+      | "---" :: rest when not in_frontmatter ->
+          extract_frontmatter acc true rest
+      | "---" :: rest when in_frontmatter -> (List.rev acc, rest)
+      | line :: rest when in_frontmatter ->
+          extract_frontmatter (line :: acc) true rest
+      | rest -> (List.rev acc, rest)
+    in
+    let frontmatter_lines, content_lines = extract_frontmatter [] false lines in
+    let frontmatter = String.concat "\n" frontmatter_lines in
+    let content = String.concat "\n" content_lines in
+    (frontmatter, content)
 
-  let mk_env pages templates_dir partials_dir =
-    { templates_dir; partials_dir; pages }
+  let parse_frontmatter frontmatter_str =
+    (* Parse frontmatter as HUML document *)
+    let lexbuf = Lexing.from_string frontmatter_str in
+    match Huml.parse lexbuf with
+    | Ok (`Assoc lst) -> lst
+    | Ok _ -> failwith "Frontmatter must be a Huml dict"
+    | Error msg -> failwith ("Failed to parse frontmatter: " ^ msg)
+
+  let read_file path =
+    open_in path
+    |> unwind ~protect:close_in @@ fun ic ->
+       let len = in_channel_length ic in
+       really_input_string ic len
+
+  let find_files_glob pattern base_dir =
+    let glob_re =
+      let glob =
+        Re.Glob.glob ~anchored:true ~expand_braces:true ~match_backslashes:true
+          pattern
+      in
+      Re.compile glob
+    in
+    let rec collect_files dir acc =
+      if Sys.is_directory dir then
+        let entries = Sys.readdir dir in
+        Array.fold_left
+          (fun acc entry ->
+            let full_path = dir // entry in
+            let relative_path =
+              if String.length full_path > String.length base_dir then
+                String.sub full_path
+                  (String.length base_dir + 1)
+                  (String.length full_path - String.length base_dir - 1)
+              else entry
+            in
+            if Re.execp glob_re relative_path then full_path :: acc
+            else if Sys.is_directory full_path then collect_files full_path acc
+            else acc)
+          acc entries
+      else acc
+    in
+    collect_files base_dir []
+
+  let collect_partials base_dir =
+    find_files_glob "*.hbs" base_dir
+    |> List.map @@ fun path ->
+       let partial_name = Filename.basename path |> Filename.remove_extension in
+       (partial_name, read_file path)
+
+  let title_of_filename filename =
+    (* convert a filename like "my-first-post.md" to "My First Post" *)
+    let base = Filename.remove_extension filename in
+    let words = String.split_on_char '-' base in
+    let capitalized_words =
+      words
+      |> List.map @@ fun word ->
+         if String.length word > 0 then String.capitalize_ascii word else word
+    in
+    String.concat " " capitalized_words
+
+  let rec rm_r dir =
+    (Sys.readdir dir
+    |> Array.iter @@ fun entry ->
+       let path = dir // entry in
+       if Sys.is_directory path then rm_r path else Sys.remove path);
+    Sys.rmdir dir
+
+  let rec mv_r src dst =
+    if Sys.file_exists dst && Sys.is_directory dst then rm_r dst;
+    Sys.mkdir dst 0o755;
+    (Sys.readdir src
+    |> Array.iter @@ fun entry ->
+       let src_path = src // entry in
+       let dst_path = dst // entry in
+       if Sys.is_directory src_path then mv_r src_path dst_path
+       else Sys.rename src_path dst_path);
+    Sys.rmdir src
+
+  let cp src dst =
+    let ic = open_in src in
+    let oc = open_out dst in
+    let buffer_size = 8192 in
+    let buffer = Bytes.create buffer_size in
+    let rec copy_loop () =
+      let bytes_read = input ic buffer 0 buffer_size in
+      if bytes_read > 0 then (
+        output oc buffer 0 bytes_read;
+        copy_loop ())
+    in
+    copy_loop ();
+    close_in ic;
+    close_out oc
+
+  let rec cp_r src dst =
+    if Sys.is_directory src then (
+      if not (Sys.file_exists dst) then Sys.mkdir dst 0o755;
+      Sys.readdir src
+      |> Array.iter @@ fun entry ->
+         let src_path = src // entry in
+         let dst_path = dst // entry in
+         if Sys.is_directory src_path then cp_r src_path dst_path
+         else cp src_path dst_path)
+    else cp src dst
+end
+
+module Template = struct
+  type t = {
+    name : string; (* for error reporting *)
+    content : string;
+    context : Huml.t;
+    partials : (string * string) list;
+    helpers : (string * Handlebars_ml.Compiler.custom_helper) list;
+  }
 
   let hb_is_truthy = function
     | `Null
@@ -237,7 +364,7 @@ module Template = struct
         false
     | _ -> true
 
-  let get_helper env name =
+  let get_helper template name =
     let md2html = function
       | [ `String md ] ->
           let html = Omd.to_html (Omd.of_string md) in
@@ -277,33 +404,6 @@ module Template = struct
 
     let basename_helper = function
       | [ `String path ] -> Some (`String (Filename.basename path))
-      | _ -> None
-    in
-
-    let get_all_pages_helper = function
-      | [ `String sort_by; `String order ] ->
-          if order <> "asc" && order <> "desc" then
-            failwith "order must be 'asc' or 'desc'"
-          else
-            let pages_hb =
-              env.pages
-              |> List.sort (fun p1 p2 ->
-                     let v1 = List.assoc_opt sort_by p1.Page.frontmatter in
-                     let v2 = List.assoc_opt sort_by p2.Page.frontmatter in
-                     match (v1, v2) with
-                     | Some (`String s1), Some (`String s2) ->
-                         String.compare s1 s2
-                     | Some (`Int i1), Some (`Int i2) -> Int.compare i1 i2
-                     | Some (`Float f1), Some (`Float f2) -> Float.compare f1 f2
-                     | Some _, Some _ -> 0
-                     | Some _, None -> 1
-                     | None, Some _ -> -1
-                     | None, None -> 0)
-              |> List.map (fun page -> Page.to_huml page)
-              |> fun ls -> if order = "asc" then ls else List.rev ls
-            in
-
-            Some (`List pages_hb)
       | _ -> None
     in
 
@@ -363,173 +463,43 @@ module Template = struct
       Some (`String (aux args))
     in
 
-    match name with
-    | "md2html" -> Some md2html
-    | "replace" -> Some replace
-    | "or" -> Some or_helper
-    | "and" -> Some and_helper
-    | "dirname" -> Some dirname_helper
-    | "basename" -> Some basename_helper
-    | "get_all_pages" -> Some get_all_pages_helper
-    | "chop_suffix" -> Some chop_suffix_helper
-    | "get_url_path" -> Some get_url_path
-    | "parse_date" -> Some parse_date
-    | "endswith" -> Some endswith
-    | "startswith" -> Some startswith
-    | "concat_path" -> Some concat_path
-    | _ -> Handlebars_ml.default_get_helper name
+    match List.assoc_opt name template.helpers with
+    | Some custom_helper -> Some custom_helper
+    | None -> (
+        match name with
+        | "md2html" -> Some md2html
+        | "replace" -> Some replace
+        | "or" -> Some or_helper
+        | "and" -> Some and_helper
+        | "dirname" -> Some dirname_helper
+        | "basename" -> Some basename_helper
+        | "chop_suffix" -> Some chop_suffix_helper
+        | "get_url_path" -> Some get_url_path
+        | "parse_date" -> Some parse_date
+        | "endswith" -> Some endswith
+        | "startswith" -> Some startswith
+        | "concat_path" -> Some concat_path
+        | _ -> Handlebars_ml.default_get_helper name)
 
-  let get_partial env partial_name =
-    let partial_path = env.partials_dir // (partial_name ^ ".hbs") in
-    if Sys.file_exists partial_path then (
-      let ic = open_in partial_path in
-      let content = really_input_string ic (in_channel_length ic) in
-      close_in ic;
-      Some content)
-    else None
+  let render template =
+    let hb_context = hb_literal_of_huml template.context in
+    let get_partial name = List.assoc_opt name template.partials in
 
-  let render env template_name context =
-    let template_path = env.templates_dir // template_name in
-    if Sys.file_exists template_path then (
-      let ic = open_in template_path in
-      let template_content = really_input_string ic (in_channel_length ic) in
-      close_in ic;
+    match
+      Handlebars_ml.compile ~get_helper:(get_helper template) ~get_partial
+        template.content hb_context
+    with
+    | Ok result -> result
+    | Error err ->
+        let msg =
+          Printf.sprintf "Render error in template %S: %s" template.name
+            (Handlebars_ml.Compiler.show_hb_error err)
+        in
+        failwith msg
 
-      (* Convert context to the correct type for handlebars-ml *)
-      let hb_context = hb_literal_of_huml context in
-
-      match
-        Handlebars_ml.compile ~get_helper:(get_helper env)
-          ~get_partial:(get_partial env) template_content hb_context
-      with
-      | Ok result -> result
-      | Error err ->
-          Printf.eprintf "Template rendering error in %s\n" template_path;
-          Printf.eprintf "Error details: %s\n"
-            (Handlebars_ml.Compiler.show_hb_error err);
-          Printf.eprintf "Template content:\n%s\n" template_content;
-          failwith ("Template rendering failed for " ^ template_name))
-    else (
-      Printf.eprintf "Warning: Template not found, skipping: %s\n" template_path;
-      "")
-end
-
-(* File processing utilities *)
-module FileUtils = struct
-  let extract_frontmatter content =
-    let lines = String.split_on_char '\n' content in
-    let rec extract_frontmatter acc in_frontmatter = function
-      | [] -> (List.rev acc, [])
-      | "---" :: rest when not in_frontmatter ->
-          extract_frontmatter acc true rest
-      | "---" :: rest when in_frontmatter -> (List.rev acc, rest)
-      | line :: rest when in_frontmatter ->
-          extract_frontmatter (line :: acc) true rest
-      | rest -> (List.rev acc, rest)
-    in
-    let frontmatter_lines, content_lines = extract_frontmatter [] false lines in
-    let frontmatter = String.concat "\n" frontmatter_lines in
-    let content = String.concat "\n" content_lines in
-    (frontmatter, content)
-
-  let parse_frontmatter frontmatter_str =
-    (* Parse frontmatter as HUML document *)
-    let lexbuf = Lexing.from_string frontmatter_str in
-    match Huml.parse lexbuf with
-    | Ok (`Assoc lst) -> lst
-    | Ok _ -> failwith "Frontmatter must be a Huml dict"
-    | Error msg -> failwith ("Failed to parse frontmatter: " ^ msg)
-
-  let read_file path =
-    let ic = open_in path in
-    let content = really_input_string ic (in_channel_length ic) in
-    close_in ic;
-    content
-
-  let find_files_glob pattern base_dir =
-    let glob_re =
-      let glob =
-        Re.Glob.glob ~anchored:true ~expand_braces:true ~match_backslashes:true
-          pattern
-      in
-      Re.compile glob
-    in
-    let rec collect_files dir acc =
-      if Sys.is_directory dir then
-        let entries = Sys.readdir dir in
-        Array.fold_left
-          (fun acc entry ->
-            let full_path = dir // entry in
-            let relative_path =
-              if String.length full_path > String.length base_dir then
-                String.sub full_path
-                  (String.length base_dir + 1)
-                  (String.length full_path - String.length base_dir - 1)
-              else entry
-            in
-            if Re.execp glob_re relative_path then full_path :: acc
-            else if Sys.is_directory full_path then collect_files full_path acc
-            else acc)
-          acc entries
-      else acc
-    in
-    collect_files base_dir []
-
-  let title_of_filename filename =
-    (* convert a filename like "my-first-post.md" to "My First Post" *)
-    let base = Filename.remove_extension filename in
-    let words = String.split_on_char '-' base in
-    let capitalized_words =
-      List.map
-        (fun word ->
-          if String.length word > 0 then String.capitalize_ascii word else word)
-        words
-    in
-    String.concat " " capitalized_words
-
-  let rec rm_r dir =
-    Sys.readdir dir
-    |> Array.iter (fun entry ->
-           let path = dir // entry in
-           if Sys.is_directory path then rm_r path else Sys.remove path);
-    Sys.rmdir dir
-
-  let rec mv_r src dst =
-    if Sys.file_exists dst && Sys.is_directory dst then rm_r dst;
-    Sys.mkdir dst 0o755;
-    Sys.readdir src
-    |> Array.iter (fun entry ->
-           let src_path = src // entry in
-           let dst_path = dst // entry in
-           if Sys.is_directory src_path then mv_r src_path dst_path
-           else Sys.rename src_path dst_path);
-    Sys.rmdir src
-
-  let cp src dst =
-    let ic = open_in src in
-    let oc = open_out dst in
-    let buffer_size = 8192 in
-    let buffer = Bytes.create buffer_size in
-    let rec copy_loop () =
-      let bytes_read = input ic buffer 0 buffer_size in
-      if bytes_read > 0 then (
-        output oc buffer 0 bytes_read;
-        copy_loop ())
-    in
-    copy_loop ();
-    close_in ic;
-    close_out oc
-
-  let rec cp_r src dst =
-    if Sys.is_directory src then (
-      if not (Sys.file_exists dst) then Sys.mkdir dst 0o755;
-      Sys.readdir src
-      |> Array.iter (fun entry ->
-             let src_path = src // entry in
-             let dst_path = dst // entry in
-             if Sys.is_directory src_path then cp_r src_path dst_path
-             else cp src_path dst_path))
-    else cp src dst
+  let of_string ~name ?(context = `Assoc []) ?(partials = []) ?(helpers = [])
+      content =
+    { name; content; context; partials; helpers }
 end
 
 (* Main site generation *)
@@ -546,38 +516,36 @@ module Generator = struct
             (String.length file_path - String.length content_dir - 1)
         else file_path
       in
-      List.exists
-        (function
-          | PageRule.ExclGlob pattern ->
-              let glob_re =
-                Re.compile
-                  (Re.Glob.glob ~anchored:true ~expand_braces:true
-                     ~match_backslashes:true pattern)
-              in
-              Re.execp glob_re relative_path
-          | PageRule.ExclPath path -> relative_path = path
-          | PageRule.Frontmatter fm_rules ->
-              let content = FileUtils.read_file file_path in
-              let frontmatter, _ = FileUtils.extract_frontmatter content in
-              let frontmatter_data =
-                if frontmatter <> "" then
-                  try FileUtils.parse_frontmatter frontmatter
-                  with exn ->
-                    failwith
-                      (Printf.sprintf "Error parsing frontmatter in %s: %s"
-                         file_path (Printexc.to_string exn))
-                else []
-              in
-              (* Check if all frontmatter rules match *)
-              List.exists
-                (fun (key, expected_value) ->
-                  match List.assoc_opt key frontmatter_data with
-                  | Some actual_value ->
-                      (* Direct HUML value comparison *)
-                      actual_value = expected_value
-                  | None -> false)
-                fm_rules)
-        rule.excl
+      rule.excl
+      |> List.exists @@ function
+         | PageRule.ExclGlob pattern ->
+             let glob_re =
+               Re.compile
+                 (Re.Glob.glob ~anchored:true ~expand_braces:true
+                    ~match_backslashes:true pattern)
+             in
+             Re.execp glob_re relative_path
+         | PageRule.ExclPath path -> relative_path = path
+         | PageRule.Frontmatter fm_rules -> (
+             let content = FileUtils.read_file file_path in
+             let frontmatter, _ = FileUtils.extract_frontmatter content in
+             let frontmatter_data =
+               if frontmatter <> "" then
+                 try FileUtils.parse_frontmatter frontmatter
+                 with exn ->
+                   failwith
+                     (Printf.sprintf "Error parsing frontmatter in %s: %s"
+                        file_path (Printexc.to_string exn))
+               else []
+             in
+             (* Check if all frontmatter rules match *)
+             fm_rules
+             |> List.exists @@ fun (key, expected_value) ->
+                match List.assoc_opt key frontmatter_data with
+                | Some actual_value ->
+                    (* Direct HUML value comparison *)
+                    actual_value = expected_value
+                | None -> false)
     in
 
     let source_files =
@@ -586,7 +554,7 @@ module Generator = struct
       | Some pattern ->
           let file_paths =
             FileUtils.find_files_glob pattern content_dir
-            |> List.filter (compose not should_exclude)
+            |> List.filter @@ compose not should_exclude
           in
           Some file_paths
     in
@@ -646,39 +614,25 @@ module Generator = struct
           | Some path -> `Assoc [ ("src_path", `String path) ]
           | None -> `Assoc []
         in
-        let hb_dst_context = hb_literal_of_huml dst_context in
-
-        let dummy_env = Template.mk_env [] "" "" in
-        let compiled_dst =
-          match
-            Handlebars_ml.compile
-              ~get_helper:(Template.get_helper dummy_env)
-              rule.dst hb_dst_context
-          with
-          | Ok path ->
-              let rec validate acc p =
-                let open Filename in
-                match (dirname p, basename p) with
-                | _, base when base = parent_dir_name || base = current_dir_name
-                  ->
-                    failwith
-                      (Printf.sprintf
-                         "Destination path %S must be a relative implicit path \
-                          (no .. or absolute paths allowed)"
-                         p)
-                | dir, base when dir = current_dir_name ->
-                    List.fold_left (fun acc' s -> acc' // s) base acc
-                | dir, base -> validate (base :: acc) dir
-              in
-              validate [] path
-          | Error err ->
-              let msg =
-                Printf.sprintf "Error compiling dst template %S: %s" rule.dst
-                  (Handlebars_ml.Compiler.show_hb_error err)
-              in
-              failwith msg
+        let tmpl_name = Printf.sprintf "dst_path(%s)" rule.name in
+        let tmpl =
+          Template.of_string ~name:tmpl_name ~context:dst_context rule.dst
         in
-        compiled_dst
+        let path = Template.render tmpl in
+        let rec validate acc p =
+          let open Filename in
+          match (dirname p, basename p) with
+          | _, base when base = parent_dir_name || base = current_dir_name ->
+              failwith
+                (Printf.sprintf
+                   "Destination path %S must be a relative implicit path (no \
+                    .. or absolute paths allowed)"
+                   p)
+          | dir, base when dir = current_dir_name ->
+              List.fold_left (fun acc' s -> acc' // s) base acc
+          | dir, base -> validate (base :: acc) dir
+        in
+        validate [] path
       in
       let url = url_of_path dst_path in
       { Page.content; frontmatter; src_path; dst_path; url; title }
@@ -700,9 +654,35 @@ module Generator = struct
 
     (* Set up template environment *)
     let templates_dir = base_dir // site.templates_dir in
-    let partials_dir = templates_dir // "partials" in
+    let partials_dir = base_dir // site.partials_dir in
     let static_dir = base_dir // site.static_dir in
-    let env = Template.mk_env all_pages templates_dir partials_dir in
+    let get_all_pages_helper = function
+      | [ `String sort_by; `String order ] ->
+          if order <> "asc" && order <> "desc" then
+            failwith "order must be 'asc' or 'desc'"
+          else
+            let pages_hb =
+              all_pages
+              |> List.sort (fun p1 p2 ->
+                     let v1 = List.assoc_opt sort_by p1.Page.frontmatter in
+                     let v2 = List.assoc_opt sort_by p2.Page.frontmatter in
+                     match (v1, v2) with
+                     | Some (`String s1), Some (`String s2) ->
+                         String.compare s1 s2
+                     | Some (`Int i1), Some (`Int i2) -> Int.compare i1 i2
+                     | Some (`Float f1), Some (`Float f2) -> Float.compare f1 f2
+                     | Some _, Some _ -> 0
+                     | Some _, None -> 1
+                     | None, Some _ -> -1
+                     | None, None -> 0)
+              |> List.map (fun page -> Page.to_huml page)
+              |> fun ls -> if order = "asc" then ls else List.rev ls
+            in
+
+            Some (`List pages_hb)
+      | _ -> None
+    in
+    let helpers = [ ("get_all_pages", get_all_pages_helper) ] in
 
     (* Generate each page *)
     let generate_page (page : Page.t) (rule : PageRule.t) =
@@ -725,7 +705,14 @@ module Generator = struct
           ]
       in
 
-      let rendered = Template.render env rule.tmpl context in
+      let tmpl_content = FileUtils.read_file (templates_dir // rule.tmpl) in
+      let tmpl =
+        Template.of_string ~name:rule.tmpl ~context
+          ~partials:(FileUtils.collect_partials partials_dir)
+          ~helpers tmpl_content
+      in
+      let rendered = Template.render tmpl in
+
       let output_path = output_dir // page.dst_path in
       let output_dir_path = Filename.dirname output_path in
 
