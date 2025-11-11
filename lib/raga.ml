@@ -501,6 +501,41 @@ module Template = struct
       Some (`String (aux args))
     in
 
+    let format_date = function
+      | [ `String date_str ] -> (
+          let date = Ptime.of_rfc3339 date_str in
+          match date with
+          | Ok (dt, tz, _) ->
+              let tz_offset_s = match tz with
+              | Some offset -> offset
+              | None -> 0
+              in
+              let (y, m, d) = Ptime.to_date ~tz_offset_s dt in
+              let month_str = match m with
+                | 1 -> "January"
+                | 2 -> "February"
+                | 3 -> "March"
+                | 4 -> "April"
+                | 5 -> "May"
+                | 6 -> "June"
+                | 7 -> "July"
+                | 8 -> "August"
+                | 9 -> "September"
+                | 10 -> "October"
+                | 11 -> "November"
+                | 12 -> "December"
+                | _ -> ""
+              in
+              let formatted = Printf.sprintf "%s %02d, %d" month_str d y in
+              Some (`String formatted)
+          | Error _ ->
+              failwith
+                (Printf.sprintf "Invalid date format: %s. Expected RFC 3339."
+                   date_str)
+      )
+      | _ -> failwith "format_date expects a single string argument"
+    in
+
     match List.assoc_opt name template.helpers with
     | Some custom_helper -> Some custom_helper
     | None -> (
@@ -514,6 +549,7 @@ module Template = struct
         | "chop_suffix" -> Some chop_suffix_helper
         | "get_url_path" -> Some get_url_path
         | "parse_date" -> Some parse_date
+        | "format_date" -> Some format_date
         | "endswith" -> Some endswith
         | "startswith" -> Some startswith
         | "concat_path" -> Some concat_path
