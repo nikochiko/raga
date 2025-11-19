@@ -3,6 +3,11 @@ open Handlebars_ml
 let ( // ) = Filename.concat
 let compose = fun f g x -> f (g x)
 
+module Logger = struct
+  let warn msg = Printf.eprintf "Warning: %s\n" msg
+  let info msg = Printf.printf "%s\n" msg
+end
+
 let rec hb_literal_of_huml = function
   | `String s -> `String s
   | `Bool b -> `Bool b
@@ -41,12 +46,12 @@ let print_ascii_table lst =
     List.fold_left (fun acc (_, v) -> max acc (String.length v)) 5 lst
   in
   let print_sep () =
-    Printf.eprintf "--%s--+--%s--\n"
+    Logger.info "--%s--+--%s--\n"
       (String.make max_fst_len '-')
       (String.make max_snd_len '-')
   in
   let print_row (fst, snd) =
-    Printf.eprintf "  %-*s  |  %-*s  \n" max_fst_len fst max_snd_len snd
+    Logger.info "  %-*s  |  %-*s  \n" max_fst_len fst max_snd_len snd
   in
   print_row ("", "Count");
   print_sep ();
@@ -716,10 +721,21 @@ module Generator = struct
     | None -> [ process_file None ]
 
   let collect_partials base_dir =
-    FileUtils.find_files_glob "*.hbs" base_dir
-    |> List.map @@ fun path ->
-       let partial_name = Filename.basename path |> Filename.remove_extension in
-       (partial_name, FileUtils.read_file path)
+    if not Sys.file_exists base_dir then
+      let msg = Printf.sprintf "Partials directory %S does not exist" base_dir in
+      Logger.warn msg;
+      []
+    else if not (Sys.is_directory base_dir) then
+      let msg =
+        Printf.sprintf "Partials directory %S is not a directory" base_dir
+      in
+      Logger.warn msg;
+      []
+    else
+      FileUtils.find_files_glob "*.hbs" base_dir
+      |> List.map @@ fun path ->
+         let partial_name = Filename.basename path |> Filename.remove_extension in
+         (partial_name, FileUtils.read_file path)
 
   let get_all_pages_helper all_pages = function
     | [ `String sort_by; `String order ] ->
@@ -786,6 +802,9 @@ module Generator = struct
       site.rules
       |> List.concat_map @@ fun rule ->
          let pages = process_page_rule site rule base_dir in
+         if List.length pages = 0 then
+            Logger.warn
+              (Printf.sprintf "No pages generated for rule: %s" rule.name);
          let new_count =
            match Hashtbl.find_opt count_by_rule rule.name with
            | Some c -> c + List.length pages
