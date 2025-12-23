@@ -46,12 +46,14 @@ let print_ascii_table lst =
     List.fold_left (fun acc (_, v) -> max acc (String.length v)) 5 lst
   in
   let print_sep () =
-    Logger.info "--%s--+--%s--\n"
+    Printf.sprintf "--%s--+--%s--\n"
       (String.make max_fst_len '-')
       (String.make max_snd_len '-')
+    |> Logger.info
   in
   let print_row (fst, snd) =
-    Logger.info "  %-*s  |  %-*s  \n" max_fst_len fst max_snd_len snd
+    Printf.sprintf "  %-*s  |  %-*s  \n" max_fst_len fst max_snd_len snd
+    |> Logger.info
   in
   print_row ("", "Count");
   print_sep ();
@@ -721,7 +723,7 @@ module Generator = struct
     | None -> [ process_file None ]
 
   let collect_partials base_dir =
-    if not Sys.file_exists base_dir then
+    if not (Sys.file_exists base_dir) then
       let msg = Printf.sprintf "Partials directory %S does not exist" base_dir in
       Logger.warn msg;
       []
