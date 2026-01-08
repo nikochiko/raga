@@ -93,8 +93,8 @@ let () =
   in
 
   let init_time = Sys.time () in
-  Printf.eprintf "raga %s\n" Version.version;
-  Printf.eprintf "Generating site...\n\n";
+  Printf.eprintf "raga %s\n%!" Version.version;
+  Printf.eprintf "Generating site...\n\n%!";
 
   let tmp_output_dir = mk_temp_dir "raga_output_" in
   Raga.Generator.generate site !source_dir tmp_output_dir;

@@ -4,8 +4,8 @@ let ( // ) = Filename.concat
 let compose = fun f g x -> f (g x)
 
 module Logger = struct
-  let warn msg = Printf.eprintf "Warning: %s\n" msg
-  let info msg = Printf.printf "%s\n" msg
+  let warn msg = Printf.eprintf "Warning: %s\n%!" msg
+  let info msg = Printf.printf "%s\n%!" msg
 end
 
 let rec hb_literal_of_huml = function
@@ -46,13 +46,13 @@ let print_ascii_table lst =
     List.fold_left (fun acc (_, v) -> max acc (String.length v)) 5 lst
   in
   let print_sep () =
-    Printf.sprintf "--%s--+--%s--\n"
+    Printf.sprintf "--%s--+--%s--"
       (String.make max_fst_len '-')
       (String.make max_snd_len '-')
     |> Logger.info
   in
   let print_row (fst, snd) =
-    Printf.sprintf "  %-*s  |  %-*s  \n" max_fst_len fst max_snd_len snd
+    Printf.sprintf "  %-*s  |  %-*s  " max_fst_len fst max_snd_len snd
     |> Logger.info
   in
   print_row ("", "Count");
@@ -699,20 +699,16 @@ module Generator = struct
           Template.of_string ~name:tmpl_name ~context:dst_context rule.dst
         in
         let path = Template.render tmpl in
-        let rec validate acc p =
-          let open Filename in
-          match (dirname p, basename p) with
-          | _, base when base = parent_dir_name || base = current_dir_name ->
+        let validate path =
+          if not (Filename.is_relative path && Filename.is_implicit path) then
               failwith
                 (Printf.sprintf
                    "Destination path %S must be a relative implicit path (no \
                     .. or absolute paths allowed)"
-                   p)
-          | dir, base when dir = current_dir_name ->
-              List.fold_left (fun acc' s -> acc' // s) base acc
-          | dir, base -> validate (base :: acc) dir
+                   path)
+          else path
         in
-        validate [] path
+        validate path
       in
       let url = url_of_path dst_path in
       { Page.content; frontmatter; src_path; dst_path; url; title; rule }
