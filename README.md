@@ -4,12 +4,10 @@ Raga is a static site generator.
 
 ## Installation
 
-You need `dune`, `opam`, and `ocaml` to be pre-installed. Then run:
+You need `opam` and `ocaml` to be pre-installed. Then run:
 
 ```
-git clone https://github.com/nikochiko/raga
-cd raga
-opam install .
+opam install raga
 ```
 
 ## Usage
